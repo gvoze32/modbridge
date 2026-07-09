@@ -62,16 +62,6 @@ class LogWatcher:
         except OSError:
             return ""
 
-    def wait_for(self, pattern: str, timeout: float, poll: float = 0.5) -> bool:
-        regex = re.compile(pattern)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if regex.search(self.read_new()):
-                return True
-            time.sleep(poll)
-        return False
-
-
 class TmuxSupervisor:
     def __init__(self, config: Config) -> None:
         self.session = config.server.tmux_session
@@ -94,27 +84,40 @@ class TmuxSupervisor:
         # '=' prefix forces exact session-name match (no prefix matching).
         return self._tmux("has-session", "-t", f"={self.session}", check=False).returncode == 0
 
-    def _first_pane(self) -> tuple[str, int] | None:
-        """(pane_id, pane_pid) of the session's first pane, or None.
+    def _panes(self) -> list[tuple[str, int, str]]:
+        """(pane_id, pane_pid, current_command) for every pane in the session.
 
-        All later commands target the concrete pane id (e.g. ``%0``): name-based
+        Commands always target concrete pane ids (e.g. ``%0``): name-based
         targets like ``=mc`` resolve inconsistently between tmux commands and
         versions, while pane ids are unambiguous everywhere.
         """
         proc = self._tmux(
             "list-panes", "-s", "-t", f"={self.session}",
-            "-F", "#{pane_id} #{pane_pid}", check=False,
+            "-F", "#{pane_id}\t#{pane_pid}\t#{pane_current_command}", check=False,
         )
         if proc.returncode != 0:
-            return None
-        lines = proc.stdout.strip().splitlines()
-        if not lines:
-            return None
-        pane_id, _, pid = lines[0].partition(" ")
-        try:
-            return pane_id, int(pid)
-        except ValueError:
-            return None
+            return []
+        panes: list[tuple[str, int, str]] = []
+        for line in proc.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            try:
+                pid = int(parts[1])
+            except ValueError:
+                continue
+            panes.append((parts[0], pid, parts[2] if len(parts) > 2 else ""))
+        return panes
+
+    def _server_pane(self) -> tuple[str, int, str] | None:
+        """The pane running the server: tmux's own view of the foreground command
+        (``pane_current_command``) is checked first, the process tree second."""
+        for pane in self._panes():
+            if "java" in pane[2].lower():
+                return pane
+            if any("java" in comm.lower() for _, comm in self._descendants(pane[1])):
+                return pane
+        return None
 
     @staticmethod
     def _descendants(root_pid: int) -> list[tuple[int, str]]:
@@ -140,17 +143,36 @@ class TmuxSupervisor:
         return result
 
     def is_server_running(self) -> bool:
-        pane = self._first_pane()
-        if pane is None:
-            return False
-        return any("java" in comm.lower() for _, comm in self._descendants(pane[1]))
+        running = self._server_pane() is not None
+        if not running:
+            log.debug("No java in tmux session '%s'; panes: %s", self.session, self._panes())
+        return running
+
+    def pane_snapshot(self, lines: int = 15) -> str:
+        """Last visible lines of the (server) pane — attached to error logs so a
+        failed start can be diagnosed after the fact."""
+        pane = self._server_pane()
+        panes = self._panes()
+        target = pane[0] if pane else (panes[0][0] if panes else None)
+        if target is None:
+            return "(tmux session not found)"
+        proc = self._tmux("capture-pane", "-p", "-t", target, check=False)
+        if proc.returncode != 0:
+            return "(could not capture pane)"
+        return "\n".join(proc.stdout.rstrip().splitlines()[-lines:])
 
     # --- console interaction ---
 
     def send_command(self, command: str) -> None:
-        pane = self._first_pane()
+        # Prefer the pane actually running the server; fall back to the first pane.
+        pane = self._server_pane()
         if pane is None:
-            raise TmuxError(f"tmux session '{self.session}' does not exist (or has no panes)")
+            panes = self._panes()
+            if not panes:
+                raise TmuxError(
+                    f"tmux session '{self.session}' does not exist (or has no panes)"
+                )
+            pane = panes[0]
         # -l sends the text literally (no key-name interpretation), Enter separately.
         self._tmux("send-keys", "-t", pane[0], "-l", "--", command)
         self._tmux("send-keys", "-t", pane[0], "Enter")
@@ -201,25 +223,47 @@ class TmuxSupervisor:
         log.info("Starting server: %s", self.start_command)
         self.send_command(self.start_command)
 
+    # Early "server is dead" verdicts need BOTH no log growth and no visible java
+    # process for this long. A booting server always keeps writing its log, so a
+    # healthy (if slow) boot can never be declared dead by a flaky process check.
+    STALL_TIMEOUT = 30.0
+
     def wait_ready(self, timeout: float) -> bool:
         """Wait until the ready pattern appears in log lines written after start.
 
         The watcher starts at the current EOF, so a stale ``Done (`` from the
         previous boot never matches; the rotation on server start resets the
-        watcher to the top of the fresh log.
+        watcher to the top of the fresh log. Log growth is treated as proof of
+        life; the process check alone is never enough to fail early.
         """
         watcher = LogWatcher(self.log_file)
         log.info("Waiting up to %.0fs for server to become ready", timeout)
         regex = re.compile(self.ready_pattern)
         deadline = time.monotonic() + timeout
-        grace_until = time.monotonic() + 15.0  # run.sh may take a moment to spawn java
+        last_activity = time.monotonic()
+        tail = ""  # keeps matches working across chunk boundaries
         while time.monotonic() < deadline:
-            if regex.search(watcher.read_new()):
-                log.info("Server is ready")
-                return True
-            if time.monotonic() > grace_until and not self.is_server_running():
-                log.error("Server process is gone while waiting for readiness")
+            chunk = watcher.read_new()
+            if chunk:
+                last_activity = time.monotonic()
+                if regex.search(tail + chunk):
+                    log.info("Server is ready")
+                    return True
+                tail = (tail + chunk)[-200:]
+            elif self.is_server_running():
+                last_activity = time.monotonic()
+            elif time.monotonic() - last_activity > self.STALL_TIMEOUT:
+                log.error(
+                    "Server looks dead: no log output and no java process for %.0fs. "
+                    "Last console output:\n%s",
+                    self.STALL_TIMEOUT,
+                    self.pane_snapshot(),
+                )
                 return False
             time.sleep(1.0)
-        log.error("Server not ready within %.0fs", timeout)
+        log.error(
+            "Server not ready within %.0fs. Last console output:\n%s",
+            timeout,
+            self.pane_snapshot(),
+        )
         return False

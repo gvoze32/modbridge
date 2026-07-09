@@ -200,6 +200,39 @@ def test_startup_failure_triggers_rollback_and_no_commit(server_dir: Path) -> No
     assert any(not n.success for n in notifier.sent)
 
 
+def test_no_backup_recovery_continues_and_commits(server_dir: Path) -> None:
+    """Readiness check fails once, rollback is unavailable (mod-only updates have
+    no maintainer backup), but the retry comes up: the update must be published."""
+    jar = make_fabric_jar(server_dir / "mods" / "sodium.jar", "sodium", "0.5.0")
+    config = make_config(server_dir)
+    committed_state_for(config, server_dir)
+
+    def apply_update() -> None:
+        make_fabric_jar(jar, "sodium", "0.6.0")
+
+    updater = FakeUpdater(plan=PLAN_ONE, on_update=apply_update, rollback_ok=False)
+    supervisor = FakeSupervisor(running=True, ready_ok=False)
+    distributor = FakeDistributor()
+    ctx = make_context(config, updater, supervisor, distributor, FakeNotifier())
+
+    original_wait = supervisor.wait_ready
+    calls = {"n": 0}
+
+    def flaky_wait(timeout: float) -> bool:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            supervisor.ready_ok = True
+        return original_wait(timeout)
+
+    supervisor.wait_ready = flaky_wait  # type: ignore[method-assign]
+
+    outcome = PipelineEngine(ctx).run()
+    assert outcome.success
+    assert updater.rollback_called == 1
+    assert distributor.versions  # the update was still published
+    assert supervisor.running
+
+
 def test_first_run_commits_initial_version(server_dir: Path) -> None:
     make_fabric_jar(server_dir / "mods" / "sodium.jar", "sodium", "0.5.0")
     config = make_config(server_dir)

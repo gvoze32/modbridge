@@ -168,25 +168,42 @@ def step_start(ctx: RunContext) -> StepResult:
 
 
 def _recover_failed_start(ctx: RunContext) -> StepResult:
-    """The server did not come up. If we just updated, roll back and retry once."""
+    """The server did not come up after an update.
+
+    Try a maintainer rollback, then one more start. The rollback is often
+    unavailable by design (the maintainer only creates backups before Minecraft
+    version updates, not before mod updates) — in that case a successful retry
+    with the updated mods is a *good* outcome and the pipeline continues.
+    """
     if ctx.update_result is None or not ctx.update_result.success:
         return StepResult.failed("Server failed to start (no update was applied this run)")
-    log.error("Server failed to start after update; rolling back via maintainer")
-    if not ctx.updater.rollback():
-        return StepResult.failed(
-            "Server failed to start after update AND rollback failed — manual intervention needed"
-        )
+    log.error("Server failed to start after update; attempting maintainer rollback")
+    rolled_back = ctx.updater.rollback()
+    if not rolled_back:
+        log.warning("No rollback available (expected for mod-only updates); retrying start")
     ctx.post_manifest = scan_mods_dir(ctx.config.mods_dir)
     ctx.supervisor.start()
-    if not ctx.supervisor.wait_ready(ctx.config.server.startup_timeout):
+    came_up = ctx.supervisor.wait_ready(ctx.config.server.startup_timeout)
+    if came_up:
+        ctx.state.last_started_manifest_hash = ctx.post_manifest.content_hash()
+        ctx.store.save(ctx.state)
+    if rolled_back:
+        if came_up:
+            return StepResult.failed(
+                "Update broke server startup; rolled back to previous state and restarted. "
+                "No update was published."
+            )
         return StepResult.failed(
             "Server failed to start even after rollback — manual intervention needed"
         )
-    ctx.state.last_started_manifest_hash = ctx.post_manifest.content_hash()
-    ctx.store.save(ctx.state)
+    if came_up:
+        return StepResult.ok(
+            "first readiness check failed, but the server started on retry with the "
+            "updated mods (no rollback was available)"
+        )
     return StepResult.failed(
-        "Update broke server startup; rolled back to previous state and restarted. "
-        "No update was published."
+        "Server failed to start after update and no backup was available to roll back — "
+        "manual intervention needed"
     )
 
 
