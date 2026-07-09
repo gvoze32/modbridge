@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from modbridge.config.schema import Config
+from modbridge.procs import find_processes_by_cwd, terminate_process
 
 log = logging.getLogger(__name__)
 
@@ -214,9 +215,43 @@ class TmuxSupervisor:
         log.error("Server did not stop within %.0fs", timeout)
         return False
 
+    def _managed_java_pids(self) -> set[int]:
+        pids: set[int] = set()
+        for pane in self._panes():
+            for pid, comm in self._descendants(pane[1]):
+                if "java" in comm.lower():
+                    pids.add(pid)
+        return pids
+
+    def kill_stray_servers(self) -> None:
+        """Stop java processes running in the server directory OUTSIDE our tmux
+        session. The maintainer's post-update startup verification leaks exactly
+        such an orphan (it kills run.sh but not java), which then holds
+        ``session.lock`` and the SakuraUpdater port, instantly killing any
+        properly-started server."""
+        managed = self._managed_java_pids()
+        for pid in find_processes_by_cwd(self.server_dir):
+            if pid in managed:
+                continue
+            log.warning(
+                "Stray server process found (pid %d, cwd %s, outside tmux) — likely leaked "
+                "by the maintainer's startup verification. Stopping it (SIGTERM saves the "
+                "world) before starting the real server.",
+                pid,
+                self.server_dir,
+            )
+            if terminate_process(pid):
+                log.info("Stray server pid %d stopped", pid)
+            else:
+                raise TmuxError(
+                    f"Could not stop stray server process {pid}; refusing to start a "
+                    "second instance against a locked world"
+                )
+
     def start(self) -> None:
         if self.is_server_running():
             return
+        self.kill_stray_servers()
         if not self.session_exists():
             log.info("Creating tmux session '%s'", self.session)
             self._tmux("new-session", "-d", "-s", self.session, "-c", str(self.server_dir))
