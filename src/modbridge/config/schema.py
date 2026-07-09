@@ -84,6 +84,18 @@ class ScheduleConfig(_Model):
         return ScheduleWindow.parse(self.window) if self.window else None
 
 
+class DependenciesConfig(_Model):
+    # Download the maintainer jar / SakuraUpdater mod from GitHub when missing.
+    auto_install: bool = True
+    # Also check for newer upstream releases on every run and swap them in.
+    auto_update: bool = False
+    maintainer_repo: str = "worflor/minecraft-server-maintainer"
+    sakura_repo: str = "NamelessXiaoJiang/SakuraUpdater"
+    # Used to pick the right SakuraUpdater asset; autodetected from
+    # current_version.txt when unset.
+    minecraft_version: str | None = None
+
+
 class ChangelogConfig(_Model):
     template: Path | None = None
     title: str = "Server Update {version}"
@@ -102,6 +114,7 @@ class Config(_Model):
     sakura: SakuraConfig = SakuraConfig()
     maintenance: MaintenanceConfig = MaintenanceConfig()
     schedule: ScheduleConfig = ScheduleConfig()
+    dependencies: DependenciesConfig = DependenciesConfig()
     changelog: ChangelogConfig = ChangelogConfig()
     notifications: NotificationsConfig = NotificationsConfig()
     state_directory: Path = Path(".modbridge")

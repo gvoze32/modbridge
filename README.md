@@ -47,8 +47,17 @@ cron ─▶ modbridge run
 
 - Linux, Python 3.12+
 - A NeoForge (or other maintainer-supported) server running inside **tmux**
-- **Java 21+** for Minecraft Server Maintainer (its jar in the server dir)
-- **SakuraUpdater** installed as a server-side mod (and on the clients)
+- **Java 21+** for Minecraft Server Maintainer
+- SakuraUpdater on the **clients** (players install it once; after that they
+  receive everything through it)
+
+The two server-side tools themselves — the Server Maintainer jar and the
+SakuraUpdater server mod — do **not** need manual installation: ModBridge
+downloads them from their GitHub releases automatically on the first run
+(`dependencies.auto_install`), and can keep them updated too
+(`dependencies.auto_update`, or manually via `modbridge setup --update`).
+When SakuraUpdater itself is updated, the new jar lands in `mods/` and is
+published to players like any other mod change.
 
 ## Install
 
@@ -96,6 +105,8 @@ modbridge run --no-countdown  # skip the player warning
 modbridge dry-run             # preview planned updates, change nothing
 modbridge status              # last run, last published version, pending changes
 modbridge validate            # check config + referenced paths
+modbridge setup               # download maintainer jar + SakuraUpdater mod
+modbridge setup --update      # also swap in newer upstream releases
 ```
 
 Cron example (checks every 30 min; the `schedule.window` in the config decides

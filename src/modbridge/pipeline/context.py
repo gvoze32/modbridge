@@ -18,6 +18,7 @@ from modbridge.adapters.base import (
     UpdateResult,
 )
 from modbridge.config.schema import Config
+from modbridge.deps.installer import DependencyManager
 from modbridge.domain.models import ChangeSet, ModsManifest
 from modbridge.state.store import PipelineState, StateStore
 
@@ -69,6 +70,8 @@ class RunContext:
     store: StateStore
     state: PipelineState
     run_id: str
+    # Optional: automatic install/update of upstream tools (None disables the step).
+    deps: DependencyManager | None = None
     # Injectable clock/sleep so pipeline tests run instantly.
     now: Callable[[], datetime] = datetime.now
     sleep: Callable[[float], None] = _time.sleep

@@ -23,6 +23,8 @@ from modbridge.adapters.notify import DiscordNotifier, LogNotifier
 from modbridge.adapters.sakura import SakuraAdapter
 from modbridge.adapters.tmux import TmuxSupervisor
 from modbridge.config.schema import Config, ConfigError, load_config
+from modbridge.deps.github import GitHubError
+from modbridge.deps.installer import DependencyError, DependencyManager
 from modbridge.logging_setup import setup_logging
 from modbridge.mods.scanner import scan_mods_dir
 from modbridge.pipeline.context import RunContext, RunOptions
@@ -70,6 +72,7 @@ def _build_context(config: Config, options: RunOptions) -> RunContext:
         store=store,
         state=store.load(),
         run_id=datetime.now().strftime("%Y%m%d-%H%M%S"),
+        deps=DependencyManager(config),
     )
 
 
@@ -145,6 +148,34 @@ def status(config: ConfigOption = _DEFAULT_CONFIG) -> None:
 
 
 @app.command()
+def setup(
+    config: ConfigOption = _DEFAULT_CONFIG,
+    update: Annotated[
+        bool,
+        typer.Option("--update", help="Also replace installed tools with newer releases."),
+    ] = False,
+) -> None:
+    """Download the maintainer jar and the SakuraUpdater mod from GitHub releases."""
+    cfg = _load(config)
+    setup_logging(cfg.log_level, cfg.state_dir)
+    manager = DependencyManager(cfg)
+    try:
+        actions = manager.ensure_all(update=update)
+    except (DependencyError, GitHubError) as exc:
+        typer.secho(f"✗ {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from None
+    for action in actions:
+        typer.secho(f"✓ {action}", fg=typer.colors.GREEN)
+    if not actions:
+        typer.secho("✓ Everything already installed and up to date", fg=typer.colors.GREEN)
+    if any("SakuraUpdater" in a for a in actions):
+        typer.echo(
+            "Note: the new SakuraUpdater jar will be published to players on the next "
+            "`modbridge run` (restart + commit)."
+        )
+
+
+@app.command()
 def validate(config: ConfigOption = _DEFAULT_CONFIG) -> None:
     """Validate the configuration file and referenced paths."""
     cfg = _load(config)
@@ -152,7 +183,13 @@ def validate(config: ConfigOption = _DEFAULT_CONFIG) -> None:
     if not cfg.server_dir.is_dir():
         problems.append(f"server.directory does not exist: {cfg.server_dir}")
     if not cfg.maintainer_jar.is_file():
-        problems.append(f"maintainer.jar not found: {cfg.maintainer_jar}")
+        if cfg.dependencies.auto_install:
+            typer.echo(
+                f"maintainer.jar missing ({cfg.maintainer_jar}); it will be downloaded "
+                "automatically on the next run (or now, via `modbridge setup`)"
+            )
+        else:
+            problems.append(f"maintainer.jar not found: {cfg.maintainer_jar}")
     if not cfg.mods_dir.is_dir():
         problems.append(f"mods directory not found: {cfg.mods_dir}")
     if cfg.changelog.template and not cfg.changelog.template.is_file():

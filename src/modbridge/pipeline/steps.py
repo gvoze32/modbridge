@@ -26,11 +26,39 @@ def step_preflight(ctx: RunContext) -> StepResult:
         return StepResult.done_early(
             f"Outside update window {window} (now {ctx.now():%H:%M}); use --force to override"
         )
-    problems = ctx.updater.preflight()
-    if problems:
-        return StepResult.failed("Preflight failed: " + "; ".join(problems))
     if not ctx.config.mods_dir.is_dir():
         ctx.warn(f"Mods directory missing: {ctx.config.mods_dir}")
+    return StepResult.ok()
+
+
+def step_dependencies(ctx: RunContext) -> StepResult:
+    """Install/update the maintainer jar and the SakuraUpdater mod from GitHub.
+
+    Runs before the tooling check so a fresh setup bootstraps itself. A new
+    SakuraUpdater jar lands in mods/, so the normal manifest diff publishes it
+    to players like any other mod change.
+    """
+    deps_cfg = ctx.config.dependencies
+    if ctx.deps is None or not (deps_cfg.auto_install or deps_cfg.auto_update):
+        return StepResult.skipped("dependency management disabled")
+    if ctx.options.dry_run:
+        return StepResult.skipped("dry run: not touching dependencies")
+    try:
+        actions = ctx.deps.ensure_all(update=deps_cfg.auto_update)
+    except Exception as exc:
+        # Only fatal when the maintainer jar is still missing; otherwise keep
+        # going with the currently installed versions.
+        if not ctx.config.maintainer_jar.is_file():
+            return StepResult.failed(f"Could not install maintainer jar: {exc}")
+        ctx.warn(f"Dependency update check failed: {exc}")
+        return StepResult.ok("kept currently installed versions")
+    return StepResult.ok("; ".join(actions) or "everything up to date")
+
+
+def step_tooling(ctx: RunContext) -> StepResult:
+    problems = ctx.updater.preflight()
+    if problems:
+        return StepResult.failed("Tooling check failed: " + "; ".join(problems))
     return StepResult.ok()
 
 
@@ -231,6 +259,8 @@ def _require_pre(ctx: RunContext) -> ModsManifest:
 
 PIPELINE: list[tuple[str, Callable[[RunContext], StepResult]]] = [
     ("preflight", step_preflight),
+    ("dependencies", step_dependencies),
+    ("tooling", step_tooling),
     ("snapshot", step_snapshot),
     ("plan", step_plan),
     ("countdown", step_countdown),

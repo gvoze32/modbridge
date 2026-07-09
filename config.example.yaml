@@ -47,6 +47,20 @@ schedule:
   # Overnight windows like "22:00-02:00" are supported. null = always allowed.
   window: "04:00-05:00"
 
+dependencies:
+  # Download the maintainer jar / SakuraUpdater server mod from their GitHub
+  # releases automatically when they are missing.
+  auto_install: true
+  # Also check for newer releases on every run and swap them in. A new
+  # SakuraUpdater jar lands in mods/, so it is published to players like any
+  # other mod change. You can also update manually with: modbridge setup --update
+  auto_update: false
+  maintainer_repo: worflor/minecraft-server-maintainer
+  sakura_repo: NamelessXiaoJiang/SakuraUpdater
+  # Used to pick the right SakuraUpdater release asset; autodetected from
+  # current_version.txt when unset.
+  minecraft_version: null
+
 changelog:
   # Optional custom Jinja2 template path; null uses the built-in markdown template.
   template: null
