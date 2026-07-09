@@ -94,14 +94,27 @@ class TmuxSupervisor:
         # '=' prefix forces exact session-name match (no prefix matching).
         return self._tmux("has-session", "-t", f"={self.session}", check=False).returncode == 0
 
-    def _pane_pid(self) -> int | None:
+    def _first_pane(self) -> tuple[str, int] | None:
+        """(pane_id, pane_pid) of the session's first pane, or None.
+
+        All later commands target the concrete pane id (e.g. ``%0``): name-based
+        targets like ``=mc`` resolve inconsistently between tmux commands and
+        versions, while pane ids are unambiguous everywhere.
+        """
         proc = self._tmux(
-            "list-panes", "-t", f"={self.session}", "-F", "#{pane_pid}", check=False
+            "list-panes", "-s", "-t", f"={self.session}",
+            "-F", "#{pane_id} #{pane_pid}", check=False,
         )
         if proc.returncode != 0:
             return None
-        first = proc.stdout.strip().splitlines()
-        return int(first[0]) if first else None
+        lines = proc.stdout.strip().splitlines()
+        if not lines:
+            return None
+        pane_id, _, pid = lines[0].partition(" ")
+        try:
+            return pane_id, int(pid)
+        except ValueError:
+            return None
 
     @staticmethod
     def _descendants(root_pid: int) -> list[tuple[int, str]]:
@@ -127,19 +140,20 @@ class TmuxSupervisor:
         return result
 
     def is_server_running(self) -> bool:
-        pane = self._pane_pid()
+        pane = self._first_pane()
         if pane is None:
             return False
-        return any("java" in comm.lower() for _, comm in self._descendants(pane))
+        return any("java" in comm.lower() for _, comm in self._descendants(pane[1]))
 
     # --- console interaction ---
 
     def send_command(self, command: str) -> None:
-        if not self.session_exists():
-            raise TmuxError(f"tmux session '{self.session}' does not exist")
+        pane = self._first_pane()
+        if pane is None:
+            raise TmuxError(f"tmux session '{self.session}' does not exist (or has no panes)")
         # -l sends the text literally (no key-name interpretation), Enter separately.
-        self._tmux("send-keys", "-t", f"={self.session}", "-l", "--", command)
-        self._tmux("send-keys", "-t", f"={self.session}", "Enter")
+        self._tmux("send-keys", "-t", pane[0], "-l", "--", command)
+        self._tmux("send-keys", "-t", pane[0], "Enter")
 
     def say(self, message: str) -> None:
         try:
