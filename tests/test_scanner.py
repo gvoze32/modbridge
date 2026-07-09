@@ -1,9 +1,8 @@
 import zipfile
 from pathlib import Path
 
-from tests.conftest import make_fabric_jar, make_neoforge_jar
-
 from modbridge.mods.scanner import scan_mods_dir
+from tests.conftest import make_fabric_jar, make_neoforge_jar
 
 
 def test_scan_fabric_jar(tmp_path: Path) -> None:

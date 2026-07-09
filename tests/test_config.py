@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import pytest
-from tests.conftest import make_config
 
 from modbridge.config.schema import Config, ConfigError, load_config
+from tests.conftest import make_config
 
 
 def test_minimal_config(server_dir: Path) -> None:

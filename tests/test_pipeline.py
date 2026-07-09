@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.conftest import make_config, make_context, make_fabric_jar
-from tests.fakes import FakeDistributor, FakeNotifier, FakeSupervisor, FakeUpdater
-
 from modbridge.adapters.base import PlannedChange, UpdatePlan, UpdateResult
 from modbridge.mods.scanner import scan_mods_dir
 from modbridge.pipeline.context import RunOptions
 from modbridge.pipeline.engine import PipelineEngine
 from modbridge.state.store import StateStore
+from tests.conftest import make_config, make_context, make_fabric_jar
+from tests.fakes import FakeDistributor, FakeNotifier, FakeSupervisor, FakeUpdater
 
 PLAN_ONE = UpdatePlan(changes=(PlannedChange("Sodium", "0.5.0", "0.6.0"),))
 
