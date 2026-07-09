@@ -1,0 +1,70 @@
+# ModBridge configuration.
+# Copy to modbridge.yaml, adjust, then check it with: modbridge validate
+
+server:
+  # The Minecraft server directory (where run.sh, mods/, logs/ live).
+  directory: /home/mc/server
+  # Existing tmux session that runs the server.
+  tmux_session: mc
+  # Command typed into the tmux session to start the server.
+  start_command: ./run.sh
+  # Server log tailed for readiness and command responses (relative to directory).
+  log_file: logs/latest.log
+  # Regex marking a completed startup.
+  ready_pattern: 'Done \('
+  startup_timeout: 300   # seconds to wait for the server to come up
+  stop_timeout: 120      # seconds to wait for a graceful stop
+
+maintainer:
+  # Path to the Minecraft Server Maintainer jar (relative paths are resolved
+  # against server.directory).
+  jar: server-maintainer.jar
+  java: java
+  timeout: 1800
+  # REQUIRED acknowledgment: unattended updates run the maintainer with --yes,
+  # which accepts the Minecraft EULA (https://aka.ms/MinecraftEULA) for you.
+  accept_eula: true
+
+sakura:
+  # SakuraUpdater's embedded HTTP server (see config/sakuraupdater-server.toml).
+  host: 127.0.0.1
+  port: 25564
+  # Console command name of the server-side mod.
+  command: sakuraupdater
+  commit_timeout: 30
+  startup_grace: 20      # seconds to allow the mod's HTTP server to come up
+
+maintenance:
+  # Player warning countdown before a restart, in descending seconds.
+  countdown: [60, 30, 10, 5, 4, 3, 2, 1]
+  message: "[Update] Server restarting for mod updates in {s}s"
+  # Skip the countdown when nobody is online.
+  skip_if_empty: true
+
+schedule:
+  # Only update inside this window (server local time). Cron may run ModBridge
+  # as often as you like; outside the window it exits immediately.
+  # Overnight windows like "22:00-02:00" are supported. null = always allowed.
+  window: "04:00-05:00"
+
+changelog:
+  # Optional custom Jinja2 template path; null uses the built-in markdown template.
+  template: null
+  title: "Server Update {version}"
+  # Attach upstream changelog snippets from Modrinth to updated mods.
+  modrinth_enrichment: false
+
+notifications:
+  # Discord webhook URL, or null to disable.
+  discord_webhook: null
+  on_success: true
+  on_failure: true
+
+# Where ModBridge keeps state, journal, logs and generated changelogs
+# (relative to server.directory).
+state_directory: .modbridge
+log_level: INFO
+
+# Manually dropped-in mods also trigger a restart before being published, so
+# clients never receive mods the running server has not loaded.
+restart_on_manual_changes: true

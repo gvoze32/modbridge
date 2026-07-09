@@ -1,0 +1,147 @@
+# ModBridge
+
+**Fully automated update pipeline for modded Minecraft servers.**
+
+ModBridge bridges two existing tools into one unattended workflow:
+
+- [Minecraft Server Maintainer](https://github.com/worflor/minecraft-server-maintainer) — updates Minecraft, the mod loader, and mods (via Modrinth)
+- [SakuraUpdater](https://github.com/NamelessXiaoJiang/SakuraUpdater) — distributes those updates to players' clients with an in-game update GUI
+
+Without ModBridge, every server update ends with a human typing
+`sakuraupdater commit <version> <description>` into the server console.
+ModBridge removes that human:
+
+```
+cron ─▶ modbridge run
+          ├─ 1  preflight   lock, schedule window, sanity checks
+          ├─ 2  snapshot    hash every mod jar on disk
+          ├─ 3  plan        maintainer --dry-run (exit early if nothing to do)
+          ├─ 4  countdown   warn players: 60s… 30s… 10s… 5 4 3 2 1
+          ├─ 5  stop        graceful stop via tmux
+          ├─ 6  update      maintainer --update-only --yes --no-relaunch
+          ├─ 7  rescan      re-hash mods, diff against what players have
+          ├─ 8  start       restart in tmux, wait for "Done ("
+          ├─ 9  changelog   generate markdown (optionally Modrinth-enriched)
+          ├─ 10 commit      inject `sakuraupdater commit` into the console
+          ├─ 11 verify      POST /updateList must return the new version
+          └─ 12 notify      Discord webhook + logs + persisted state
+```
+
+## Safety properties
+
+- **Never publishes a broken update.** A failed maintainer run, a leftover
+  `woflo/.pending` marker, a rollback, or a server that won't start all abort
+  the run *before* the SakuraUpdater commit. If startup fails after an update,
+  ModBridge rolls back via the maintainer and restarts the old state.
+- **Never commits twice / commits nothing.** Publishing is guarded by a
+  content hash of the mods directory: if what's on disk equals what players
+  already received, there is no commit.
+- **Never leaves the server down.** Any failure after the stop step triggers a
+  recovery restart.
+- **Never overlaps with itself.** A `flock`-based lock rejects concurrent runs.
+- **Manual changes are first-class.** Mods you drop in by hand are detected by
+  the filesystem diff and published too (after a restart, so clients never get
+  files the running server hasn't loaded).
+
+## Requirements
+
+- Linux, Python 3.12+
+- A NeoForge (or other maintainer-supported) server running inside **tmux**
+- **Java 21+** for Minecraft Server Maintainer (its jar in the server dir)
+- **SakuraUpdater** installed as a server-side mod (and on the clients)
+
+## Install
+
+```bash
+pipx install modbridge        # or: pip install modbridge
+cp config.example.yaml modbridge.yaml
+$EDITOR modbridge.yaml
+modbridge validate
+```
+
+## Usage
+
+```bash
+modbridge run                 # what cron calls; honors the schedule window
+modbridge run --force         # admin: update NOW, bypass the window
+modbridge run --no-countdown  # skip the player warning
+modbridge dry-run             # preview planned updates, change nothing
+modbridge status              # last run, last published version, pending changes
+modbridge validate            # check config + referenced paths
+```
+
+Cron example (checks every 30 min; the `schedule.window` in the config decides
+when updates actually happen):
+
+```cron
+*/30 * * * * cd /home/mc/server && /home/mc/.local/bin/modbridge run -c modbridge.yaml >> .modbridge/cron.log 2>&1
+```
+
+## Configuration
+
+See [config.example.yaml](config.example.yaml) — every key is documented there.
+Two settings deserve special attention:
+
+- `maintainer.accept_eula: true` is **required**: unattended updates run the
+  maintainer with `--yes`, which accepts the
+  [Minecraft EULA](https://aka.ms/MinecraftEULA) on your behalf.
+- `schedule.window: "04:00-05:00"` restricts restarts to a maintenance window;
+  overnight windows (`"22:00-02:00"`) work too.
+
+## How it integrates (for the curious)
+
+- The maintainer is driven as a subprocess with
+  `--update-only --yes --no-relaunch` and `NO_COLOR=1`; ModBridge parses
+  `woflo/update.log` for `Update | name old -> new` lines, checks for the
+  `woflo/.pending` crash marker, and reads `current_version.txt`.
+  The maintainer's own crash-loop supervisor is deliberately not used — tmux
+  stays in charge of the server process.
+- The SakuraUpdater commit is injected into the server console via
+  `tmux send-keys`. The changelog is written to a file and its *path* is passed
+  as the commit description — SakuraUpdater then embeds the file's markdown
+  content. The commit is verified through SakuraUpdater's embedded HTTP API
+  (`POST /updateList`), not by log scraping.
+- Ground truth for "did anything change" is ModBridge's own SHA-256 manifest of
+  `mods/`, with mod names/versions read from each jar's metadata
+  (`neoforge.mods.toml` / `mods.toml` / `fabric.mod.json` / `quilt.mod.json`).
+
+## Architecture
+
+Clean, adapter-based layout — each external system sits behind a `Protocol`, so
+new backends (Packwiz, RCON, systemd, other distributors) are drop-in plugins:
+
+```
+src/modbridge/
+├── domain/       manifests, change sets, diffing (pure, no I/O)
+├── mods/         mods-directory scanner (jar metadata + hashing)
+├── config/       pydantic-validated YAML config
+├── schedule.py   update window
+├── state/        atomic state store, run journal, flock lock
+├── adapters/
+│   ├── base.py       UpdaterBackend / ServerSupervisor / Distributor / NotificationSink
+│   ├── maintainer.py Minecraft Server Maintainer (subprocess)
+│   ├── tmux.py       tmux supervisor + rotation-aware log watcher
+│   ├── sakura.py     SakuraUpdater (console inject + HTTP verify)
+│   └── notify.py     Discord webhook, log sink
+├── changelog/    Jinja2 markdown renderer + optional Modrinth enrichment
+├── pipeline/     step functions + engine (journaled, self-recovering)
+└── cli/          typer CLI
+```
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+ruff check src tests && mypy && pytest
+```
+
+The pipeline is fully testable without a real server: all adapters have
+in-memory fakes (`tests/fakes.py`), and the test suite covers the happy path,
+failed updates, rollback-on-broken-startup, manual-change publishing, schedule
+windows, dry runs, and crash recovery.
+
+## License
+
+MIT. Upstream projects keep their own licenses (Server Maintainer: GPL-3.0;
+SakuraUpdater: all rights reserved) — ModBridge only orchestrates them as
+external processes and does not redistribute either.
