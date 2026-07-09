@@ -52,12 +52,40 @@ cron ─▶ modbridge run
 
 ## Install
 
+ModBridge is not published to PyPI; install it straight from this repository.
+On modern distros (PEP 668 "externally-managed-environment"), use pipx:
+
 ```bash
-pipx install modbridge        # or: pip install modbridge
+apt install pipx              # if you don't have it yet
+pipx install git+https://github.com/gvoze32/modbridge.git
+```
+
+If `modbridge` is not found afterwards (pipx installs to `~/.local/bin`), run
+`pipx ensurepath` once and open a new shell. Cron doesn't read your shell PATH
+either way — use the absolute path (e.g. `~/.local/bin/modbridge`) in crontab.
+
+Or with a plain virtualenv:
+
+```bash
+python3 -m venv /opt/modbridge
+/opt/modbridge/bin/pip install git+https://github.com/gvoze32/modbridge.git
+ln -s /opt/modbridge/bin/modbridge /usr/local/bin/modbridge
+```
+
+To upgrade later, re-run the install command (with pipx, add `--force`:
+`pipx install --force git+https://github.com/gvoze32/modbridge.git`).
+Then configure:
+
+```bash
+cd /home/mc/server
+curl -fsSLO https://raw.githubusercontent.com/gvoze32/modbridge/main/config.example.yaml
 cp config.example.yaml modbridge.yaml
 $EDITOR modbridge.yaml
 modbridge validate
 ```
+
+Run ModBridge as the same user that owns the tmux session — `tmux send-keys`
+can only reach sessions belonging to the invoking user.
 
 ## Usage
 

@@ -42,7 +42,8 @@ dev = [
 modbridge = "modbridge.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/modbridge/modbridge"
+Homepage = "https://github.com/gvoze32/modbridge"
+Issues = "https://github.com/gvoze32/modbridge/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/modbridge"]
