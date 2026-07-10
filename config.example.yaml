@@ -26,13 +26,22 @@ maintainer:
   accept_eula: true
 
 sakura:
-  # SakuraUpdater's embedded HTTP server (see config/sakuraupdater-server.toml).
+  # SakuraUpdater's embedded HTTP server.
   host: 127.0.0.1
   port: 25564
   # Console command name of the server-side mod.
   command: sakuraupdater
   commit_timeout: 30
   startup_grace: 20      # seconds to allow the mod's HTTP server to come up
+  # ModBridge writes SakuraUpdater's real config file for you
+  # (config/sakuraupdater-common.toml — note: the mod's README names the wrong
+  # file). port and sync_dirs below are applied during the next restart window.
+  manage_config: true
+  # What gets synced to players. Format "target:mode[:source...]";
+  # modes: mirror (exact sync, deletes extras), push (copy only), ignore (regex).
+  # Example with client-mod exceptions:
+  #   sync_dirs: ["mods:mirror", 'mods:ignore:.*iris.*\.jar$']
+  sync_dirs: ["mods:mirror"]
 
 maintenance:
   # Player warning countdown before a restart, in descending seconds.

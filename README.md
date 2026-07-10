@@ -59,6 +59,14 @@ downloads them from their GitHub releases automatically on the first run
 When SakuraUpdater itself is updated, the new jar lands in `mods/` and is
 published to players like any other mod change.
 
+SakuraUpdater's server config is managed too (`sakura.manage_config`, on by
+default): declare `sakura.sync_dirs` (default `["mods:mirror"]`) in
+modbridge.yaml and ModBridge writes `config/sakuraupdater-common.toml` — the
+file the mod *actually* reads (its README names a `sakuraupdater-server.toml`
+that is never read in mod mode) — during a window where the server is down.
+Commit verification also fails loudly if a published manifest contains zero
+files, which is the symptom of a broken `SYNC_DIR`.
+
 ## Install
 
 ModBridge is not published to PyPI; install it straight from this repository.

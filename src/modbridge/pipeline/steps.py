@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
+from modbridge.adapters.sakura_config import sakura_config_synced, write_sakura_config
 from modbridge.changelog.renderer import render_changelog
 from modbridge.domain.models import ChangeSet, ModsManifest, diff_manifests
 from modbridge.mods.scanner import scan_mods_dir
@@ -78,6 +79,9 @@ def step_plan(ctx: RunContext) -> StepResult:
         committed is not None and committed.content_hash() != ctx.pre_manifest.content_hash()
     )
     never_committed = committed is None
+    # SakuraUpdater's own config drifting from modbridge.yaml also forces a
+    # maintenance cycle: the file must be rewritten while the server is down.
+    config_drift = ctx.config.sakura.manage_config and not sakura_config_synced(ctx.config)
 
     if ctx.options.dry_run:
         lines = [f"  {c.name}: {c.old_version} -> {c.new_version}" for c in ctx.plan.changes]
@@ -85,10 +89,11 @@ def step_plan(ctx: RunContext) -> StepResult:
         return StepResult.done_early(
             f"Dry run. Planned updates:\n{planned}\n"
             f"Unpublished manual changes: {'yes' if manual_changes else 'no'}\n"
-            f"Initial commit pending: {'yes' if never_committed else 'no'}"
+            f"Initial commit pending: {'yes' if never_committed else 'no'}\n"
+            f"SakuraUpdater config in sync: {'no (will be rewritten)' if config_drift else 'yes'}"
         )
 
-    if not ctx.needs_update and not manual_changes and not never_committed:
+    if not ctx.needs_update and not manual_changes and not never_committed and not config_drift:
         return StepResult.done_early("No updates available and nothing unpublished")
 
     # A restart is needed unless the running server already loaded exactly the
@@ -97,7 +102,7 @@ def step_plan(ctx: RunContext) -> StepResult:
         ctx.supervisor.is_server_running()
         and ctx.state.last_started_manifest_hash == ctx.pre_manifest.content_hash()
     )
-    if ctx.needs_update:
+    if ctx.needs_update or config_drift:
         ctx.needs_restart = True
     elif manual_changes or never_committed:
         ctx.needs_restart = ctx.config.restart_on_manual_changes and not server_runs_current
@@ -132,6 +137,17 @@ def step_stop(ctx: RunContext) -> StepResult:
         return StepResult.failed("Server did not stop in time; aborting before any file changes")
     ctx.stopped_server = True
     return StepResult.ok()
+
+
+def step_configure(ctx: RunContext) -> StepResult:
+    """Write SakuraUpdater's real config file (sakuraupdater-common.toml) from
+    modbridge.yaml. Runs after `stop`, so the mod loads it fresh on startup."""
+    if not ctx.config.sakura.manage_config:
+        return StepResult.skipped("sakura.manage_config disabled")
+    if sakura_config_synced(ctx.config):
+        return StepResult.skipped("SakuraUpdater config already in sync")
+    path = write_sakura_config(ctx.config)
+    return StepResult.ok(f"wrote {path.name}")
 
 
 def step_update(ctx: RunContext) -> StepResult:
@@ -282,6 +298,7 @@ PIPELINE: list[tuple[str, Callable[[RunContext], StepResult]]] = [
     ("plan", step_plan),
     ("countdown", step_countdown),
     ("stop", step_stop),
+    ("configure", step_configure),
     ("update", step_update),
     ("rescan", step_rescan),
     ("start", step_start),

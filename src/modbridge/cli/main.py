@@ -194,6 +194,29 @@ def validate(config: ConfigOption = _DEFAULT_CONFIG) -> None:
         problems.append(f"mods directory not found: {cfg.mods_dir}")
     if cfg.changelog.template and not cfg.changelog.template.is_file():
         problems.append(f"changelog.template not found: {cfg.changelog.template}")
+
+    from modbridge.adapters.sakura_config import (
+        read_sakura_config,
+        sakura_config_path,
+        sakura_config_synced,
+    )
+
+    sakura_file = sakura_config_path(cfg)
+    if cfg.sakura.manage_config:
+        if not sakura_config_synced(cfg):
+            typer.echo(
+                f"SakuraUpdater config ({sakura_file.name}) out of sync with modbridge.yaml; "
+                "it will be rewritten during the next run's restart window"
+            )
+    else:
+        _, sync_dirs = read_sakura_config(sakura_file)
+        if not sync_dirs:
+            problems.append(
+                f"SakuraUpdater SYNC_DIR is empty or unreadable in {sakura_file} — commits "
+                "would contain no files. Fix it manually or set sakura.manage_config: true. "
+                "(Note: the mod reads sakuraupdater-common.toml, not the README's "
+                "sakuraupdater-server.toml.)"
+            )
     if problems:
         for p in problems:
             typer.secho(f"✗ {p}", fg=typer.colors.RED, err=True)

@@ -53,6 +53,22 @@ class SakuraConfig(_Model):
     command: str = "sakuraupdater"
     commit_timeout: float = Field(default=30.0, gt=0)
     startup_grace: float = Field(default=20.0, ge=0)
+    # ModBridge writes config/sakuraupdater-common.toml (the file the mod actually
+    # reads) from `port` and `sync_dirs`, during a window where the server is down.
+    manage_config: bool = True
+    sync_dirs: tuple[str, ...] = ("mods:mirror",)
+
+    @field_validator("sync_dirs")
+    @classmethod
+    def _valid_entries(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        for entry in v:
+            parts = entry.split(":")
+            if len(parts) < 2 or parts[1] not in ("mirror", "push", "ignore"):
+                raise ValueError(
+                    f"invalid sync_dirs entry {entry!r}: expected 'target:mode[:source...]' "
+                    "with mode mirror, push or ignore"
+                )
+        return v
 
 
 class MaintenanceConfig(_Model):

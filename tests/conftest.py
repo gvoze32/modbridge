@@ -45,6 +45,12 @@ def make_neoforge_jar(
 def server_dir(tmp_path: Path) -> Path:
     d = tmp_path / "server"
     (d / "mods").mkdir(parents=True)
+    # SakuraUpdater config in sync with make_config() defaults, so pipeline tests
+    # don't trigger the config-drift maintenance cycle unless they want to.
+    (d / "config").mkdir()
+    (d / "config" / "sakuraupdater-common.toml").write_text(
+        'port = 25564\nSYNC_DIR = ["mods:mirror"]\n'
+    )
     return d
 
 

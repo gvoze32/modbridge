@@ -30,15 +30,22 @@ log = logging.getLogger(__name__)
 
 
 class SakuraAdapter:
-    def __init__(self, config: Config, supervisor: ServerSupervisor) -> None:
+    def __init__(
+        self,
+        config: Config,
+        supervisor: ServerSupervisor,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self.base_url = f"http://{config.sakura.host}:{config.sakura.port}"
         self.command = config.sakura.command
         self.commit_timeout = config.sakura.commit_timeout
+        self.mods_dir = config.mods_dir
         self.supervisor = supervisor
+        self._client = httpx.Client(timeout=10.0, transport=transport)
 
     def _post(self, path: str, payload: dict[str, Any] | None = None) -> httpx.Response | None:
         try:
-            return httpx.post(f"{self.base_url}{path}", json=payload or {}, timeout=10.0)
+            return self._client.post(f"{self.base_url}{path}", json=payload or {})
         except httpx.HTTPError as exc:
             log.debug("SakuraUpdater %s unreachable: %s", path, exc)
             return None
@@ -82,16 +89,43 @@ class SakuraAdapter:
                 return candidate
         raise RuntimeError(f"Exhausted version suffixes for {base}")
 
+    def _manifest_file_count(self, data: dict[str, Any]) -> int:
+        paths = data.get("paths")
+        if not isinstance(paths, list):
+            return 0
+        return sum(
+            len(p.get("files", [])) for p in paths if isinstance(p, dict)
+        )
+
     def commit(self, version: str, changelog_file: Path) -> bool:
-        """Inject the commit command into the server console and verify via HTTP."""
+        """Inject the commit command into the server console and verify via HTTP.
+
+        Verification is two-fold: the version must appear in /updateList AND its
+        manifest must actually contain files (an empty manifest means the mod's
+        SYNC_DIR is broken — clients would "update" to nothing).
+        """
         if not changelog_file.is_file():
             log.error("Changelog file missing: %s", changelog_file)
             return False
         self.supervisor.send_command(f"{self.command} commit {version} {changelog_file}")
         deadline = time.monotonic() + self.commit_timeout
         while time.monotonic() < deadline:
-            if self.version_exists(version):
-                log.info("SakuraUpdater commit %s verified via /updateList", version)
+            data = self._update_list(version)
+            if data and data.get("version") == version:
+                files = self._manifest_file_count(data)
+                mods_on_disk = any(self.mods_dir.glob("*.jar")) if self.mods_dir.is_dir() else False
+                if files == 0 and mods_on_disk:
+                    log.error(
+                        "Commit %s landed but its manifest is EMPTY while mods/ has files — "
+                        "SakuraUpdater's SYNC_DIR is not configured. Clients would receive "
+                        "nothing. Check config/sakuraupdater-common.toml (or enable "
+                        "sakura.manage_config).",
+                        version,
+                    )
+                    return False
+                log.info(
+                    "SakuraUpdater commit %s verified via /updateList (%d files)", version, files
+                )
                 return True
             time.sleep(1.0)
         log.error(
