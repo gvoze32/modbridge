@@ -12,6 +12,9 @@ server:
   log_file: logs/latest.log
   # Regex marking a completed startup.
   ready_pattern: 'Done \('
+  # Regex marking a completed shutdown (checked in the log to avoid relying
+  # solely on process-exit detection, which can be slow or unreliable).
+  shutdown_pattern: 'ThreadedAnvilChunkStorage: All dimensions are saved'
   startup_timeout: 300   # seconds to wait for the server to come up
   stop_timeout: 120      # seconds to wait for a graceful stop
 

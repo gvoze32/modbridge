@@ -29,6 +29,7 @@ class ServerConfig(_Model):
     start_command: str = "./run.sh"
     log_file: Path = Path("logs/latest.log")
     ready_pattern: str = r"Done \("
+    shutdown_pattern: str = r"ThreadedAnvilChunkStorage: All dimensions are saved"
     startup_timeout: float = Field(default=300.0, gt=0)
     stop_timeout: float = Field(default=120.0, gt=0)
 

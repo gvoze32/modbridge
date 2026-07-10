@@ -70,6 +70,7 @@ class TmuxSupervisor:
         self.start_command = config.server.start_command
         self.log_file = config.server_log
         self.ready_pattern = config.server.ready_pattern
+        self.shutdown_pattern = config.server.shutdown_pattern
 
     # --- tmux plumbing ---
 
@@ -206,12 +207,45 @@ class TmuxSupervisor:
         if not self.is_server_running():
             return True
         log.info("Stopping server (timeout %.0fs)", timeout)
+
+        # Start watching the log BEFORE sending 'stop' so we don't miss lines.
+        watcher = LogWatcher(self.log_file)
+        shutdown_re = re.compile(self.shutdown_pattern)
+
         self.send_command("stop")
         deadline = time.monotonic() + timeout
+        shutdown_logged = False
+
         while time.monotonic() < deadline:
+            # Check log for shutdown pattern (fast signal — server finished saving).
+            chunk = watcher.read_new()
+            if chunk and shutdown_re.search(chunk):
+                shutdown_logged = True
+                log.info("Server shutdown detected via log")
+
+            # Process gone → done immediately.
             if not self.is_server_running():
                 return True
+
+            # Log says shutdown is complete but java is still exiting — give it
+            # a short grace period rather than waiting the full timeout.
+            if shutdown_logged:
+                grace_deadline = min(time.monotonic() + 15, deadline)
+                while time.monotonic() < grace_deadline:
+                    if not self.is_server_running():
+                        return True
+                    time.sleep(0.5)
+                # Grace period expired but java is still alive.  This is likely a
+                # JVM cleanup delay; the server has already saved everything, so
+                # it is safe to proceed.
+                log.warning(
+                    "Server log indicates clean shutdown but java process still "
+                    "alive after grace period — proceeding anyway"
+                )
+                return True
+
             time.sleep(1.0)
+
         log.error("Server did not stop within %.0fs", timeout)
         return False
 
