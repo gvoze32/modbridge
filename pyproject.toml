@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "modbridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Automated update pipeline for Minecraft servers: bridges Minecraft Server Maintainer and SakuraUpdater into one unattended workflow."
 readme = "README.md"
 requires-python = ">=3.12"
