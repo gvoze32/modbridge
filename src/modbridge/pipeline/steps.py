@@ -9,6 +9,7 @@ happens if the published manifest differs from disk).
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 
 from modbridge.adapters.sakura_config import sakura_config_synced, write_sakura_config
@@ -173,6 +174,16 @@ def step_rescan(ctx: RunContext) -> StepResult:
 
 def step_start(ctx: RunContext) -> StepResult:
     assert ctx.post_manifest is not None
+
+    if ctx.stopped_server:
+        # If we initiated a stop, the JVM might still be finishing its shutdown
+        # due to the grace period in step_stop. We must wait for it to fully exit.
+        deadline = time.monotonic() + 60.0
+        while ctx.supervisor.is_server_running() and time.monotonic() < deadline:
+            time.sleep(1.0)
+        if ctx.supervisor.is_server_running():
+            return StepResult.failed("Old server process refused to exit; cannot start new instance")
+
     if ctx.supervisor.is_server_running():
         return StepResult.skipped("server already running")
     ctx.supervisor.start()

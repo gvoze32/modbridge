@@ -235,13 +235,16 @@ class TmuxSupervisor:
                     if not self.is_server_running():
                         return True
                     time.sleep(0.5)
-                # Grace period expired but java is still alive.  This is likely a
-                # JVM cleanup delay; the server has already saved everything, so
-                # it is safe to proceed.
+                # Grace period expired but java is still alive. The server has
+                # already saved everything, so we force-kill the hung JVM to
+                # ensure the port is freed and a new instance can start.
                 log.warning(
                     "Server log indicates clean shutdown but java process still "
-                    "alive after grace period — proceeding anyway"
+                    "alive after grace period — force-killing hung JVM"
                 )
+                for pid in self._managed_java_pids():
+                    if terminate_process(pid):
+                        log.info("Force-killed hung server pid %d", pid)
                 return True
 
             time.sleep(1.0)
