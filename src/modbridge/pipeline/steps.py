@@ -182,7 +182,9 @@ def step_start(ctx: RunContext) -> StepResult:
         while ctx.supervisor.is_server_running() and time.monotonic() < deadline:
             time.sleep(1.0)
         if ctx.supervisor.is_server_running():
-            return StepResult.failed("Old server process refused to exit; cannot start new instance")
+            return StepResult.failed(
+                "Old server process refused to exit; cannot start new instance"
+            )
 
     if ctx.supervisor.is_server_running():
         return StepResult.skipped("server already running")
